@@ -24,8 +24,7 @@ struct EntityProperty {
         name @0 :Text;
         coords @1 :Coords;
         movementSpeed @2 :Float32;
-        currentAction @3 :Text;
-        radius @4 :Float32;
+        radius @3 :Float32;
     }
 
     struct Coords {

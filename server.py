@@ -9,7 +9,8 @@ import client_capnp
 import command_capnp
 import login_capnp
 import server_capnp
-from entity_capnp.EntityProperty import Coords
+
+from netattr.entity import ObservableEntity, ObservableProperty
 
 
 class Login(login_capnp.Login.Server):
@@ -20,7 +21,7 @@ class Login(login_capnp.Login.Server):
         if not self.server.validate_login(self.address, name):
             raise ValueError('Invalid username or client already connected.')
 
-        print('New user connected: %s (%s:%d)' % ((name,) + self.address))
+        print('New user connected: %s (%s:%d)' % (name, *self.address))
         return self.server.connect(client, name, self)
 
     def on_connect(self, client):
@@ -29,7 +30,7 @@ class Login(login_capnp.Login.Server):
 
     def on_disconnect(self):
         print('User %s (%s:%d) disconnected.' % (
-            (self.server.clients[self.address].name,) + self.address
+            self.server.clients[self.address].name, *self.address
         ))
         self.server.disconnect(self.address)
 
@@ -56,73 +57,82 @@ class Server(server_capnp.Server.Server):
         pass
 
 
-class Player(server_capnp.Player.Server):
+class Player(ObservableEntity, server_capnp.Player.Server):
+    name = ObservableProperty()
+    coords = ObservableProperty(
+        entity_capnp.EntityProperty.Coords.new_message(x=.5, y=.5)
+    )
+    movementSpeed = ObservableProperty(450)
+    radius = ObservableProperty(45)
+
     def __init__(self, server):
         self.server = server
-        self.clients = []
+        self.clients = {}
+        self.name = server.client.name
 
         props = [
-            self._register_property(prop, value) for prop, value in dict(
-                name=server.client.name,
-                coords=Coords.new_message(x=.5, y=.5),
-                movement_speed=450,
-                radius=45,
-                current_action='',
-            ).items()
+            entity_capnp.EntityProperty.new_message(
+                **{prop: getattr(self, prop)}
+            )
+            for prop in self.properties()
         ]
+
         self.entity = entity_capnp.Entity.new_message(
             type=entity_capnp.Entity.Type.player,
             props=props,
         )
 
+        self.bind(**{
+            prop: lambda _, value, prop=prop: self.update_clients(prop, value)
+            for prop in self.properties()
+        })
+
         self.current_actions = []
 
-    def register_property(self, prop, value):
-        if hasattr(type(self), prop):
-            raise ValueError(
-                'Property {} is already registered on class {}!'.format(
-                    prop,
-                    type(self).__name__,
-                )
+    def update_clients(self, prop, value):
+        promises = []
+
+        for client in self.clients.values():
+            promises.append(
+                client.update(entity_capnp.EntityProperty.new_message(
+                    **{prop: value}
+                ))
             )
 
-        new_prop = entity_capnp.EntityProperty.new_message
-
-        def getter(self):
-            return getattr(self, prop)
-
-        def setter(self, value):
-            if value != getattr(self, prop):
-                setattr(self, prop, value)
-                self.entity_handle.update(new_prop(**{prop: value}))
-
-        attr = property(getter, setter, doc='<EntityProperty %s>' % prop)
-        setattr(type(self), prop, attr)
-
-        return new_prop(**{prop: value})
+        try:
+            capnp.join_promises(promises).wait()
+        except capnp.lib.capnp.KjException:
+            # Probably a disconnected client, ignore
+            pass
 
     def do(self, action, _context):
         if action.startswith(('+', '-')):
             reverse_action = False
+
             if action[0] == '-':
                 reverse_action = True
+
             action = action[1:]
+
         if not reverse_action:
-            if action_name not in self.current_actions:
-                self.current_actions.append(action_name)
+            if action not in self.current_actions:
+                self.current_actions.append(action)
         else:
-            if action_name in self.current_actions:
-                self.current_actions.remove(action_name)
+            if action in self.current_actions:
+                self.current_actions.remove(action)
 
 
 class Client(object):
     def __init__(self, address, client_handle, name):
         self.address = address
-        self._client_handle = client_handle
+        self.client_handle = client_handle
         self.name = name
 
     def send(self, command):
-        return self._client_handle.send(command)
+        return self.client_handle.send(command)
+
+    def create(self, entity):
+        return self.client_handle.create(entity)
 
 
 class ServerApp(object):
@@ -156,21 +166,25 @@ class ServerApp(object):
         for player in self.players[:]:
             if player.server.client.address == address:
                 self.players.remove(player)
-                break
+
+            del player.clients[self.clients[address]]
 
         del self.clients[address]
 
     def spawn(self, player):
         self.players.append(player)
 
-        for client in self.clients:
-            player.clients.append(client.create(player.entity))
+        for client in self.clients.values():
+            player.clients[client] = client.create(player.entity).handle
 
     def update(self):
+        Coords = entity_capnp.EntityProperty.Coords
+
         for player in self.players:
             movement_speed = (
-                player.movement_speed / 100. * 1. / self.sv_fps
+                player.movementSpeed / 100. * 1. / self.sv_fps
             )
+
             for action in player.current_actions[:]:
                 coord_x, coord_y = player.coords.x, player.coords.y
                 if action == 'up':
@@ -198,11 +212,6 @@ class ServerApp(object):
                     #)
                     #level.add_widget(bomb, index=1)
 
-            player.current_action = (
-                player.current_actions[-1]
-                if player.current_actions else ''
-            )
-
     def run(self):
         listen_address = '%s:%d' % (self.address, self.port)
         self.server = capnp.TwoPartyServer(
@@ -211,7 +220,7 @@ class ServerApp(object):
         )
         print('Listening on %s' % listen_address)
         tick_duration = 1. / self.sv_fps
-        self._running_server = self
+        type(self)._running_server = self
 
         while True:
             self.update()

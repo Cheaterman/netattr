@@ -4,59 +4,69 @@ class PropertyStorage:
         self.observers = []
 
 
-class NetworkedProperty:
+class ObservableProperty:
     def __init__(self, default_value=None):
         self.default_value = default_value
         self.name = ''
-        self.cls = None
+        self.instance = None
 
     def __repr__(self):
-        return '<NetworkedProperty {}>'.format(
-            '{} of {}'.format(self.name, self.cls.__name__)
-            if self.name and self.cls else '(unbound)'
+        return '<ObservableProperty {}>'.format(
+            '{} of {}'.format(self.name, self.instance)
+            if self.name and self.instance else '(unbound)'
         )
 
     def __get__(self, instance, owner):
-        if instance is not None:
-            return instance.__storage[self.name].value
-        else:
+        if instance is None:
             return self
 
+        return instance.__storage[self.name].value
+
     def __set__(self, instance, value):
-        if value != getattr(instance, self.name):
-            instance.__storage[self.name].value = value
-            print('Got change: {}.{} = {}'.format(
-                instance.__class__.__name__,
-                self.name,
-                value
-            ))
+        storage = instance.__storage[self.name]
+
+        if value != storage.value:
+            storage.value = value
+
+            for callback in storage.observers:
+                callback(instance, value)
 
     def link(self, instance, name):
         self.name = name
-        self.cls = instance.__class__
+        self.instance = instance
 
-        if not hasattr(instance, '__storage'):
+        try:
+            instance.__storage
+        except AttributeError:
             instance.__storage = {}
 
         instance.__storage[name] = PropertyStorage(self.default_value)
 
+    def bind(self, callback):
+        self.instance.__storage[self.name].observers.append(callback)
 
-class NetworkedEntity:
+
+class ObservableEntity:
     def __new__(cls, *args, **kwargs):
-        self = super(Base, cls).__new__(cls, *args, **kwargs)
+        result = super(ObservableEntity, cls).__new__(cls, *args, **kwargs)
 
         properties = {}
 
-        for name, prop in cls.__dict__.items():
-            if isinstance(prop, NetworkedProperty):
-                prop.link(self, name)
+        for name, prop in vars(cls).items():
+            if isinstance(prop, ObservableProperty):
+                prop.link(result, name)
                 properties[name] = prop
 
-        self.__properties = properties
-        return self
+        result.__properties = properties
+
+        return result
 
     def property(self, name):
         return self.__properties[name]
 
     def properties(self):
         return dict(self.__properties)
+
+    def bind(self, **kwargs):
+        for prop, callback in kwargs.items():
+            self.__properties[prop].bind(callback)
