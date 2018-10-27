@@ -4,18 +4,18 @@ import time
 import uuid
 
 import capnp
-import entity_capnp
-import client_capnp
-import command_capnp
-import login_capnp
-import server_capnp
+from netattr.capnp import entity_capnp
+from netattr.capnp import client_capnp
+from netattr.capnp import command_capnp
+from netattr.capnp import login_capnp
+from netattr.capnp import server_capnp
 
-from netattr.entity import ObservableEntity, ObservableProperty
+from netattr.entity import Observable, Property
 
 
 class Login(login_capnp.Login.Server):
     def __init__(self):
-        self.server = ServerApp.get_running_server()
+        self.server = App.get_running_app()
 
     def connect(self, client, name, _context):
         if not self.server.validate_login(self.address, name):
@@ -44,26 +44,21 @@ class LoginHandle(login_capnp.Login.LoginHandle.Server):
 
 
 class Server(server_capnp.Server.Server):
-    def __init__(self, client, server):
+    def __init__(self, client, app):
         self.client = client
-        self.server = server
+        self.app = app
 
     def join(self, _context):
-        player = Player(self)
-        self.server.spawn(player)
+        player = self.app.player_class(self)
+        self.app.spawn(player)
         return player
 
     def send(self, command, _context):
         pass
 
 
-class Player(ObservableEntity, server_capnp.Player.Server):
-    name = ObservableProperty()
-    coords = ObservableProperty(
-        entity_capnp.EntityProperty.Coords.new_message(x=.5, y=.5)
-    )
-    movementSpeed = ObservableProperty(450)
-    radius = ObservableProperty(45)
+class Player(Observable, server_capnp.Player.Server):
+    name = Property()
 
     def __init__(self, server):
         self.server = server
@@ -87,8 +82,6 @@ class Player(ObservableEntity, server_capnp.Player.Server):
             for prop in self.properties()
         })
 
-        self.current_actions = []
-
     def update_clients(self, prop, value):
         for client in self.clients.values():
             client.update(entity_capnp.EntityProperty.new_message(
@@ -96,20 +89,7 @@ class Player(ObservableEntity, server_capnp.Player.Server):
             ))
 
     def do(self, action, _context):
-        if action.startswith(('+', '-')):
-            reverse_action = False
-
-            if action[0] == '-':
-                reverse_action = True
-
-            action = action[1:]
-
-        if not reverse_action:
-            if action not in self.current_actions:
-                self.current_actions.append(action)
-        else:
-            if action in self.current_actions:
-                self.current_actions.remove(action)
+        pass
 
 
 class Client(object):
@@ -125,11 +105,13 @@ class Client(object):
         return self.client_handle.create(entity)
 
 
-class ServerApp(object):
-    _running_server = None
+class App(object):
+    player_class = Player
+
+    _running_app = None
 
     def __init__(self, **kwargs):
-        ServerApp._running_server = self
+        App._running_app = self
         self.address = kwargs.get('address', '0.0.0.0')
         self.port = kwargs.get('port', 25000)
         self.sv_fps = kwargs.get('sv_fps', 60)
@@ -172,39 +154,7 @@ class ServerApp(object):
             player.clients[client] = client.create(player.entity).handle
 
     def update(self):
-        Coords = entity_capnp.EntityProperty.Coords
-
-        for player in self.players:
-            movement_speed = (
-                player.movementSpeed / 100. * 1. / self.sv_fps
-            )
-
-            for action in player.current_actions[:]:
-                coord_x, coord_y = player.coords.x, player.coords.y
-                if action == 'up':
-                    coord_y += movement_speed
-                if action == 'down':
-                    coord_y -= movement_speed
-                if action == 'right':
-                    coord_x += movement_speed
-                if action == 'left':
-                    coord_x -= movement_speed
-                player.coords = Coords.new_message(x=coord_x, y=coord_y)
-
-                if action == 'bomb':
-                    player.current_actions.remove('bomb')
-                    # TODO: Do this :)
-
-                    #level = player.level
-                    #tile = level.tile_at(*level.coords(*player.center))
-                    #if any([bomb.tile is tile for bomb in level.bombs]):
-                    #    continue
-                    #bomb = Bomb(
-                    #    level=level,
-                    #    tile=tile,
-                    #    owner=player,
-                    #)
-                    #level.add_widget(bomb, index=1)
+        pass
 
     def run(self):
         listen_address = '%s:%d' % (self.address, self.port)
@@ -222,10 +172,5 @@ class ServerApp(object):
             time.sleep(tick_duration - (time.time() - start_time))
 
     @staticmethod
-    def get_running_server():
-        return ServerApp._running_server
-
-
-if __name__ == '__main__':
-    server = ServerApp()
-    server.run()
+    def get_running_app():
+        return App._running_app

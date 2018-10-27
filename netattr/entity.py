@@ -4,14 +4,14 @@ class PropertyStorage:
         self.observers = []
 
 
-class ObservableProperty:
+class Property:
     def __init__(self, default_value=None):
         self.default_value = default_value
         self.name = ''
         self.instance = None
 
     def __repr__(self):
-        return '<ObservableProperty {}>'.format(
+        return '<Property {}>'.format(
             '{} of {}'.format(self.name, self.instance)
             if self.name and self.instance else '(unbound)'
         )
@@ -46,27 +46,44 @@ class ObservableProperty:
         self.instance.__storage[self.name].observers.append(callback)
 
 
-class ObservableEntity:
-    def __new__(cls, *args, **kwargs):
-        result = super(ObservableEntity, cls).__new__(cls, *args, **kwargs)
+class ObservableMeta(type):
+    def __new__(cls, name, bases, attrs):
+        result = super(ObservableMeta, cls).__new__(cls, name, bases, attrs)
 
-        properties = {}
+        def _property(self, name):
+            return self.__properties[name]
 
-        for name, prop in vars(cls).items():
-            if isinstance(prop, ObservableProperty):
-                prop.link(result, name)
-                properties[name] = prop
+        def _properties(self):
+            return dict(self.__properties)
 
-        result.__properties = properties
+        result.property = _property
+        result.properties = _properties
 
         return result
 
-    def property(self, name):
-        return self.__properties[name]
+    def __init__(self, name, bases, attrs):
+        attrs.update({
+            attr: value
+            for base in bases
+            for attr, value in vars(base).items()
+            if isinstance(value, Property)
+        })
 
-    def properties(self):
-        return dict(self.__properties)
+        properties = {}
 
+        for name, prop in attrs.items():
+            if isinstance(prop, Property):
+                prop.link(self, name)
+                properties[name] = prop
+
+        try:
+            self.__properties.update(properties)
+        except AttributeError:
+            self.__properties = properties
+
+
+
+class Observable(metaclass=ObservableMeta):
     def bind(self, **kwargs):
         for prop, callback in kwargs.items():
-            self.__properties[prop].bind(callback)
+            self.property(prop).bind(callback)
