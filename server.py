@@ -129,6 +129,7 @@ class ServerApp(object):
     _running_server = None
 
     def __init__(self, **kwargs):
+        ServerApp._running_server = self
         self.address = kwargs.get('address', '0.0.0.0')
         self.port = kwargs.get('port', 25000)
         self.sv_fps = kwargs.get('sv_fps', 60)
@@ -213,7 +214,6 @@ class ServerApp(object):
         )
         print('Listening on %s' % listen_address)
         tick_duration = 1. / self.sv_fps
-        type(self)._running_server = self
 
         while True:
             self.update()
@@ -221,9 +221,9 @@ class ServerApp(object):
             capnp.getTimer().after_delay(tick_duration).wait()
             time.sleep(tick_duration - (time.time() - start_time))
 
-    @classmethod
-    def get_running_server(cls):
-        return cls._running_server
+    @staticmethod
+    def get_running_server():
+        return ServerApp._running_server
 
 
 if __name__ == '__main__':
