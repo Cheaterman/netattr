@@ -90,20 +90,10 @@ class Player(ObservableEntity, server_capnp.Player.Server):
         self.current_actions = []
 
     def update_clients(self, prop, value):
-        promises = []
-
         for client in self.clients.values():
-            promises.append(
-                client.update(entity_capnp.EntityProperty.new_message(
-                    **{prop: value}
-                ))
-            )
-
-        try:
-            capnp.join_promises(promises).wait()
-        except capnp.lib.capnp.KjException:
-            # Probably a disconnected client, ignore
-            pass
+            client.update(entity_capnp.EntityProperty.new_message(
+                **{prop: value}
+            ))
 
     def do(self, action, _context):
         if action.startswith(('+', '-')):
@@ -159,6 +149,9 @@ class ServerApp(object):
     def connect(self, client_handle, name, login):
         client = Client(login.address, client_handle, name)
         self.clients[login.address] = client
+
+        for player in self.players:
+            player.clients[client] = client.create(player.entity).handle
 
         return Server(client, self), LoginHandle(login)
 

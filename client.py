@@ -9,10 +9,15 @@ import login_capnp
 
 
 class EntityHandle(entity_capnp.EntityHandle.Server):
-    def __init__(self, app):
+    def __init__(self, app, type, props):
         self.app = app
+        self.type = type
+        for name, value in (list(prop.items())[0] for prop in props):
+            setattr(self, name, value)
 
     def update(self, property, _context):
+        name, value = list(property.to_dict().items())[0]
+        setattr(self, name, value)
         self.app.update_entity(self, property)
 
 
@@ -45,29 +50,41 @@ class ClientApp(object):
 
         self.player = player = server.join().wait().player
 
-        player.do('+up').wait()
-
         while True:
-            capnp.getTimer().after_delay(1 / 60.).wait()
+            def delay_for(seconds):
+                import time
+                start_time = time.time()
+                while time.time() < start_time + seconds:
+                    capnp.getTimer().after_delay(1 / 60.).wait()
+
+            player.do('+up').wait()
+            delay_for(1)
+            player.do('-up').wait()
+            delay_for(1)
+            player.do('+down').wait()
+            delay_for(1)
+            player.do('-down').wait()
+            delay_for(1)
 
     def do_command(self, command):
         print('do_command', command)
 
     def create_entity(self, entity):
-        print('create_entity', entity)
-
-        handle = EntityHandle(self)
+        handle = EntityHandle(self, **entity.to_dict())
         self.entities.append(handle)
+
+        print('create_entity', vars(handle))
 
         return handle
 
-    def update_entity(self, entity_handle, property):
-        print('update_entity', property)
+    def update_entity(self, entity_handle, prop):
+        print('update_entity', vars(entity_handle))
 
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         print('Usage: {} name'.format(sys.argv[0]))
+        sys.exit(1)
 
     client = ClientApp()
     client.run('127.0.0.1:25000', sys.argv[1])
